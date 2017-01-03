@@ -5,7 +5,15 @@ __author__ = 'Michael Liao'
 
 '''
 Database operation module.
+这是一个数据库操作模块，在原始的数据模块上多做了一层封装。
+整个模块有三个层次_db_ctx, _LasyConnection, engine 三个层次的抽象
+_db_ctx 解决多线程下数据库使用，通过theading.local基类
+_LasyConnection 自动管理数据库连接，按需连接
+engine 数据库类型的抽象，方便替换不同的数据库后端
+_ConnectionCtx 上下文类，用于处理数据库连接的关闭
+_TransactionCtx 上下文类，用于处理数据库事务的提交与回滚
 '''
+
 
 import time, uuid, functools, threading, logging
 
@@ -13,6 +21,9 @@ import time, uuid, functools, threading, logging
 
 class Dict(dict):
     '''
+    通过定义 __getattr__，__setattr__ 方法，使得可以通过属性访问的方式访问一条记录的每个字段
+    这是后面orm模块的基础
+
     Simple dict but support access as x.y style.
 
     >>> d1 = Dict()
@@ -67,6 +78,7 @@ def next_id(t=None):
     return '%015d%s000' % (int(t * 1000), uuid.uuid4().hex)
 
 def _profiling(start, sql=''):
+    """用来做sql语句执行时长的统计和分析"""
     t = time.time() - start
     if t > 0.1:
         logging.warning('[PROFILING] [DB] %s: %s' % (t, sql))
@@ -80,7 +92,10 @@ class MultiColumnsError(DBError):
     pass
 
 class _LasyConnection(object):
-
+    """
+    数据库连接类，只有当调用到cursor方法，也就是真正要操作数据库时，才会真正去连接数据库，
+    这样可以减小不必要的数据库连接，并且提供cleanup方法进行关闭数据库连接和清理。
+    """
     def __init__(self):
         self.connection = None
 
@@ -107,6 +122,8 @@ class _LasyConnection(object):
 class _DbCtx(threading.local):
     '''
     Thread local object that holds connection info.
+        全局的数据库连接对象，继承threading.local是为了整个线程里使用同一个连接对象（_db_ctx），
+    如果在不同的线程中，虽然都是引用_db_ctx，但不是同一个对象，也就是_db_ctx是线程间隔离的。
     '''
     def __init__(self):
         self.connection = None
@@ -137,7 +154,7 @@ _db_ctx = _DbCtx()
 engine = None
 
 class _Engine(object):
-
+    """对需要连接的数据库做一层抽象，这样就可以方便地适配不同数据库"""
     def __init__(self, connect):
         self._connect = connect
 
@@ -152,6 +169,7 @@ def create_engine(user, password, database, host='127.0.0.1', port=3306, **kw):
     params = dict(user=user, password=password, database=database, host=host, port=port)
     defaults = dict(use_unicode=True, charset='utf8', collation='utf8_general_ci', autocommit=False)
     for k, v in defaults.iteritems():
+        # default中的每个key，如果kw中有就用kw中的value，否则用default中的value
         params[k] = kw.pop(k, v)
     params.update(kw)
     params['buffered'] = True
@@ -161,7 +179,8 @@ def create_engine(user, password, database, host='127.0.0.1', port=3306, **kw):
 
 class _ConnectionCtx(object):
     '''
-    _ConnectionCtx object that can open and close connection context. _ConnectionCtx object can be nested and only the most 
+    上下文类，用于使用with语句时自动关闭数据库连接
+    _ConnectionCtx object that can open and close connection context. _ConnectionCtx object can be nested and only the most
     outer connection has effect.
 
     with connection():
@@ -193,6 +212,7 @@ def connection():
 
 def with_connection(func):
     '''
+    装饰器，用于省略语句，在函数定义时就添加自动关闭连接的支持
     Decorator for reuse connection.
 
     @with_connection
@@ -209,6 +229,7 @@ def with_connection(func):
 
 class _TransactionCtx(object):
     '''
+    数据库事务处理上下文类，可以处理多层事务的嵌套
     _TransactionCtx object that can handle transactions.
 
     with _TransactionCtx():
@@ -222,7 +243,7 @@ class _TransactionCtx(object):
             # needs open a connection first:
             _db_ctx.init()
             self.should_close_conn = True
-        _db_ctx.transactions = _db_ctx.transactions + 1
+        _db_ctx.transactions = _db_ctx.transactions + 1  # 这里使用 x += 1 的语法更好
         logging.info('begin transaction...' if _db_ctx.transactions==1 else 'join current transaction...')
         return self
 
@@ -286,6 +307,7 @@ def transaction():
 
 def with_transaction(func):
     '''
+    和 with_connection 类似
     A decorator that makes function around transaction.
 
     >>> @with_transaction
@@ -314,15 +336,20 @@ def with_transaction(func):
     return _wrapper
 
 def _select(sql, first, *args):
-    ' execute select SQL and return unique result or list results.'
+    """
+    数据库读操作的封装
+    execute select SQL and return unique result or list results.
+    """
     global _db_ctx
     cursor = None
+    # 将原来sql语句用“？”占位符改为对应数据库支持的占位符，此处是mysql，所以是%s，sqlite者为?。
     sql = sql.replace('?', '%s')
     logging.info('SQL: %s, ARGS: %s' % (sql, args))
     try:
         cursor = _db_ctx.connection.cursor()
+        # 通过“sql语句+参数”的形式执行sql，而不是直接格式化字符串，可以防止sql注入攻击
         cursor.execute(sql, args)
-        if cursor.description:
+        if cursor.description:  # cursor.description 可以获取到所有字段名
             names = [x[0] for x in cursor.description]
         if first:
             values = cursor.fetchone()
@@ -337,7 +364,9 @@ def _select(sql, first, *args):
 @with_connection
 def select_one(sql, *args):
     '''
-    Execute select SQL and expected one result. 
+    fetchone的封装
+
+    Execute select SQL and expected one result.
     If no result found, return None.
     If multiple results found, the first one returned.
 
@@ -360,7 +389,7 @@ def select_one(sql, *args):
 @with_connection
 def select_int(sql, *args):
     '''
-    Execute select SQL and expected one int and only one int result. 
+    Execute select SQL and expected one int and only one int result.
 
     >>> n = update('delete from user')
     >>> u1 = dict(id=96900, name='Ada', email='ada@test.org', passwd='A-12345', last_modified=time.time())
@@ -390,6 +419,8 @@ def select_int(sql, *args):
 @with_connection
 def select(sql, *args):
     '''
+    fetchall的封装
+
     Execute select SQL and return list or empty list if no result.
 
     >>> u1 = dict(id=200, name='Wall.E', email='wall.e@test.org', passwd='back-to-earth', last_modified=time.time())
@@ -414,6 +445,8 @@ def select(sql, *args):
 
 @with_connection
 def _update(sql, *args):
+    """数据库写操作的封装"""
+
     global _db_ctx
     cursor = None
     sql = sql.replace('?', '%s')
