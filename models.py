@@ -5,6 +5,8 @@ __author__ = 'Michael Liao'
 
 '''
 Models for user, blog, comment.
+这个模块和Django的model类似，写过Django的一看就懂了。
+User，Blog，Comment三个model满足一个博客网站所需的基本表
 '''
 
 import time, uuid
@@ -12,7 +14,7 @@ import time, uuid
 from transwarp.db import next_id
 from transwarp.orm import Model, StringField, BooleanField, FloatField, TextField
 
-def next_id():
+def next_id():  # 通过时间戳加uuid，生成不重复的id
     return '%015d%s000' % (int(time.time() * 1000), uuid.uuid4().hex)
 
 class User(Model):
