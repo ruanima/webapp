@@ -72,7 +72,7 @@ _RE_TZ = re.compile('^([\+\-])([0-9]{1,2})\:([0-9]{1,2})$')
 
 class UTC(datetime.tzinfo):
     '''
-    A UTC tzinfo object. 
+    A UTC tzinfo object.
 
     >>> tz0 = UTC('+00:00')
     >>> tz0.tzname(None)
@@ -234,6 +234,7 @@ _RESPONSE_HEADERS = (
     'X-UA-Compatible',
 )
 
+# _RESPONSE_HEADER_DICT = {i.upper(): i for i in _RESPONSE_HEADERS} 使用字典表达式，更为推荐
 _RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
 
 _HEADER_X_POWERED_BY = ('X-Powered-By', 'transwarp/1.0')
@@ -394,7 +395,7 @@ def seeother(location):
     return RedirectError(303, location)
 
 def _to_str(s):
-    '''
+    '''因为wsgi不处理文本编码，这些要自己编写函数解决
     Convert to str.
 
     >>> _to_str('s123') == 's123'
@@ -420,7 +421,7 @@ def _to_unicode(s, encoding='utf-8'):
     return s.decode('utf-8')
 
 def _quote(s, encoding='utf-8'):
-    '''
+    '''url编码
     Url quote as str.
 
     >>> _quote('http://example/test?a=1+')
@@ -433,7 +434,7 @@ def _quote(s, encoding='utf-8'):
     return urllib.quote(s)
 
 def _unquote(s, encoding='utf-8'):
-    '''
+    '''url解码
     Url unquote as unicode.
 
     >>> _unquote('http%3A//example/test%3Fa%3D1+')
@@ -442,7 +443,7 @@ def _unquote(s, encoding='utf-8'):
     return urllib.unquote(s).decode(encoding)
 
 def get(path):
-    '''
+    '''给定义的view函数加上一些属性
     A @get decorator.
 
     @get('/:id')
@@ -467,7 +468,7 @@ def get(path):
     return _decorator
 
 def post(path):
-    '''
+    '''与get装饰器类似
     A @post decorator.
 
     >>> @post('/post/:id')
@@ -487,10 +488,10 @@ def post(path):
         return func
     return _decorator
 
-_re_route = re.compile(r'(\:[a-zA-Z_]\w*)')
+_re_route = re.compile(r'(\:[a-zA-Z_]\w*)') # 匹配类似 /blog/:blog_id中的‘:blog_id’，用了判断是否有动态内容
 
 def _build_regex(path):
-    r'''
+    r'''构造正则表达式，将类似'/blog/:id/'中的id解析出来
     Convert route path to regex.
 
     >>> _build_regex('/path/to/:file')
@@ -503,9 +504,9 @@ def _build_regex(path):
     re_list = ['^']
     var_list = []
     is_var = False
-    for v in _re_route.split(path):
+    for v in _re_route.split(path):  # 类似['/path/to/', ':file', '']
         if is_var:
-            var_name = v[1:]
+            var_name = v[1:]  # file
             var_list.append(var_name)
             re_list.append(r'(?P<%s>[^\/]+)' % var_name)
         else:
@@ -532,12 +533,14 @@ class Route(object):
     def __init__(self, func):
         self.path = func.__web_route__
         self.method = func.__web_method__
-        self.is_static = _re_route.search(self.path) is None
-        if not self.is_static:
+        self.is_static = _re_route.search(self.path) is None  # 没匹配到网址通配符说明view函数是静态
+        if not self.is_static:  # view函数对应的url是动态的，则生成对应的正则表达式
             self.route = re.compile(_build_regex(self.path))
         self.func = func
 
     def match(self, url):
+        '''获取到url中动态的参数'''
+
         m = self.route.match(url)
         if m:
             return m.groups()
@@ -554,6 +557,7 @@ class Route(object):
     __repr__ = __str__
 
 def _static_file_generator(fpath):
+    '''文件分块返回'''
     BLOCK_SIZE = 8192
     with open(fpath, 'rb') as f:
         block = f.read(BLOCK_SIZE)
@@ -562,6 +566,7 @@ def _static_file_generator(fpath):
             block = f.read(BLOCK_SIZE)
 
 class StaticFileRoute(object):
+    '''解析图片js等静态文件'''
 
     def __init__(self):
         self.method = 'GET'
@@ -578,15 +583,18 @@ class StaticFileRoute(object):
         if not os.path.isfile(fpath):
             raise notfound()
         fext = os.path.splitext(fpath)[1]
+        # 根据文件类型生成对于的mimetypes，例如js文件对应'application/javascript'
         ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
         return _static_file_generator(fpath)
 
-def favicon_handler():
-    return static_file_handler('/favicon.ico')
+# def favicon_handler():
+#     # 没找到static_file_handler的定义，应该是写漏了
+#     return static_file_handler('/favicon.ico')
 
 class MultipartFile(object):
     '''
     Multipart file storage get from request input.
+    此处的storage应该是cgi.FieldStorage对象
 
     f = ctx.request['file']
     f.filename # 'test.png'
@@ -602,10 +610,12 @@ class Request(object):
     '''
 
     def __init__(self, environ):
-        self._environ = environ
+        self._environ = environ  # wsgi的environ字典
 
     def _parse_input(self):
+        """将从cgi处得到的用户输入，包括from的内容等进行解析"""
         def _convert(item):
+            # 将FieldStorage中的参数转换成合适的类型
             if isinstance(item, list):
                 return [_to_unicode(i.value) for i in item]
             if item.filename:
@@ -613,12 +623,12 @@ class Request(object):
             return _to_unicode(item.value)
         fs = cgi.FieldStorage(fp=self._environ['wsgi.input'], environ=self._environ, keep_blank_values=True)
         inputs = dict()
-        for key in fs:
+        for key in fs:  # fs[key]的值是web请求的参数，可能是get，也可能是post
             inputs[key] = _convert(fs[key])
         return inputs
 
     def _get_raw_input(self):
-        '''
+        '''将用户的原始输入转换成合适的类型，并且绑定到self._raw_input上
         Get raw input as dict containing values as unicode, list or MultipartFile.
         '''
         if not hasattr(self, '_raw_input'):
@@ -655,7 +665,7 @@ class Request(object):
         'just a test'
         '''
         r = self._get_raw_input()[key]
-        if isinstance(r, list):
+        if isinstance(r, list):  # web请求的参数，同一个key有多个值则取第一个值
             return r[0]
         return r
 
@@ -677,7 +687,7 @@ class Request(object):
         return r
 
     def gets(self, key):
-        '''
+        '''获取一个key的所有值
         Get multiple values for specified key.
 
         >>> from StringIO import StringIO
@@ -826,6 +836,7 @@ class Request(object):
         return self._environ.get('HTTP_HOST', '')
 
     def _get_headers(self):
+        """将environ中的一些参数名称转换成http headers"""
         if not hasattr(self, '_headers'):
             hdrs = {}
             for k, v in self._environ.iteritems():
@@ -855,7 +866,7 @@ class Request(object):
 
     def header(self, header, default=None):
         '''
-        Get header from request as unicode, return None if not exist, or default if specified. 
+        Get header from request as unicode, return None if not exist, or default if specified.
         The header name is case-insensitive such as 'USER-AGENT' or u'content-Type'.
 
         >>> r = Request({'HTTP_USER_AGENT': 'Mozilla/5.0', 'HTTP_ACCEPT': 'text/html'})
@@ -872,6 +883,9 @@ class Request(object):
         return self._get_headers().get(header.upper(), default)
 
     def _get_cookies(self):
+        '''解析cookies，格式为name1=val1; name2=val2
+        解析的时候name作为key，val url解码作为value
+        '''
         if not hasattr(self, '_cookies'):
             cookies = {}
             cookie_str = self._environ.get('HTTP_COOKIE')
@@ -1055,12 +1069,12 @@ class Response(object):
           name: the cookie name.
           value: the cookie value.
           max_age: optional, seconds of cookie's max age.
-          expires: optional, unix timestamp, datetime or date object that indicate an absolute time of the 
+          expires: optional, unix timestamp, datetime or date object that indicate an absolute time of the
                    expiration time of cookie. Note that if expires specified, the max_age will be ignored.
           path: the cookie path, default to '/'.
           domain: the cookie domain, default to None.
           secure: if the cookie secure, default to False.
-          http_only: if the cookie is for http only, default to True for better safty 
+          http_only: if the cookie is for http only, default to True for better safty
                      (client-side script cannot access cookies with HttpOnly flag).
 
         >>> r = Response()
@@ -1284,7 +1298,9 @@ def view(path):
         return _wrapper
     return _decorator
 
+# 开头为非*号和?的多个字符，可以*结尾， 如/nage/ddd*，group(1)为/nage/ddd
 _RE_INTERCEPTROR_STARTS_WITH = re.compile(r'^([^\*\?]+)\*?$')
+# 开头为*号， 如*/nage/ddd，group(1)为/nage/ddd
 _RE_INTERCEPTROR_ENDS_WITH = re.compile(r'^\*([^\*\?]+)$')
 
 def _build_pattern_fn(pattern):
@@ -1318,8 +1334,9 @@ def _build_interceptor_fn(func, next):
     return _wrapper
 
 def _build_interceptor_chain(last_fn, *interceptors):
-    '''
+    '''构造拦截器链，使能够对对path_info的每一部分进行权限控制
     Build interceptor chain.
+
 
     >>> def target():
     ...     print 'target'
@@ -1363,12 +1380,13 @@ def _build_interceptor_chain(last_fn, *interceptors):
     L = list(interceptors)
     L.reverse()
     fn = last_fn
+    # 相当于 f1(f2(f3(target)))
     for f in L:
         fn = _build_interceptor_fn(f, fn)
     return fn
 
 def _load_module(module_name):
-    '''
+    '''通过名称导入模块，并且返回
     Load module from name as str.
 
     >>> m = _load_module('xml')
@@ -1382,10 +1400,10 @@ def _load_module(module_name):
     'xml.sax.handler'
     '''
     last_dot = module_name.rfind('.')
-    if last_dot==(-1):
+    if last_dot==(-1):  # 单模块，__import__通过模块名import模块，并返回模块对象
         return __import__(module_name, globals(), locals())
-    from_module = module_name[:last_dot]
-    import_module = module_name[last_dot+1:]
+    from_module = module_name[:last_dot]  # 包名
+    import_module = module_name[last_dot+1:]  # 模块名
     m = __import__(from_module, globals(), locals(), [import_module])
     return getattr(m, import_module)
 
@@ -1429,10 +1447,12 @@ class WSGIApplication(object):
         logging.info('Add module: %s' % m.__name__)
         for name in dir(m):
             fn = getattr(m, name)
+            # __web_route__和__web_method__由get或者post装饰器绑定到view函数上，有这两个熟悉的可调用对象就是view函数
             if callable(fn) and hasattr(fn, '__web_route__') and hasattr(fn, '__web_method__'):
-                self.add_url(fn)
+                self.add_url(fn)  # 如果fn是view函数则add_url
 
     def add_url(self, func):
+        '''构造url和view函数的映射表'''
         self._check_not_running()
         route = Route(func)
         if route.is_static:
@@ -1459,14 +1479,19 @@ class WSGIApplication(object):
         server.serve_forever()
 
     def get_wsgi_application(self, debug=False):
+        """此函数返回一个wsgi应用函数"""
+
         self._check_not_running()
-        if debug:
+        if debug:  # 加入静态文件的解析
             self._get_dynamic.append(StaticFileRoute())
         self._running = True
 
         _application = Dict(document_root=self._document_root)
 
         def fn_route():
+            '''对于每一个http请求，区分是静态还是动态的，然后调用对应的处理函数
+            也就是fn_route是view函数的抽象，只要调用它就能调用到符合当前url的的view函数
+            '''
             request_method = ctx.request.request_method
             path_info = ctx.request.path_info
             if request_method=='GET':
@@ -1488,31 +1513,33 @@ class WSGIApplication(object):
                         return fn(*args)
                 raise notfound()
             raise badrequest()
-
+        # fn_exec就是带上拦截器的view函数
         fn_exec = _build_interceptor_chain(fn_route, *self._interceptors)
 
         def wsgi(env, start_response):
+            """wsgi应用函数"""
+
             ctx.application = _application
-            ctx.request = Request(env)
+            ctx.request = Request(env)  # 将wsgi传过来的environ信息包装为Request对象
             response = ctx.response = Response()
             try:
                 r = fn_exec()
                 if isinstance(r, Template):
-                    r = self._template_engine(r.template_name, r.model)
+                    r = self._template_engine(r.template_name, r.model)  # 模版渲染
                 if isinstance(r, unicode):
                     r = r.encode('utf-8')
                 if r is None:
                     r = []
                 start_response(response.status, response.headers)
                 return r
-            except RedirectError, e:
+            except RedirectError, e:  # 处理3xx
                 response.set_header('Location', e.location)
                 start_response(e.status, response.headers)
                 return []
-            except HttpError, e:
+            except HttpError, e:  # 处理其他http错误
                 start_response(e.status, response.headers)
                 return ['<html><body><h1>', e.status, '</h1></body></html>']
-            except Exception, e:
+            except Exception, e:  # 其他异常都为服务器错误
                 logging.exception(e)
                 if not debug:
                     start_response('500 Internal Server Error', [])
