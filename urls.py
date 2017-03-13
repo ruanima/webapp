@@ -31,6 +31,7 @@ def make_signed_cookie(id, password, max_age):
     return '-'.join(L)
 
 def parse_signed_cookie(cookie_str):
+    '''此处构造的md5其实就是会话的session_id'''
     try:
         L = cookie_str.split('-')
         if len(L) != 3:
