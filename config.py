@@ -48,7 +48,7 @@ def toDict(d):
 configs = config_default.configs
 
 try:
-    import config_override
+    import config_override  # 这里可以用来做开发环境和生产环境的配置区分
     configs = merge(configs, config_override.configs)
 except ImportError:
     pass
