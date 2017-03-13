@@ -1268,7 +1268,7 @@ def _default_error_handler(e, start_response, is_debug):
     return ('<html><body><h1>500 Internal Server Error</h1><h3>%s</h3></body></html>' % str(e))
 
 def view(path):
-    '''
+    '''通过view装饰器，完成从model渲染templete
     A view decorator that render a view by dict.
 
     >>> @view('test/view.html')
